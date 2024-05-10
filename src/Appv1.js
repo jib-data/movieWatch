@@ -1,11 +1,27 @@
-import { useEffect, useState } from "react";
-
+import { useEffect, useRef, useState } from "react";
+import { useMovies } from "./useMovies";
+const key = "c50445b6";
 // Review reducer function of an array
 const average = (arr) =>
   arr.reduce((acc, cur, i, arr) => acc + cur / arr.length, 0);
-const key = "c50445b6";
 
 function NavBar({ movies, query, setQuery }) {
+  const inputEl = useRef(null);
+  useEffect(
+    function () {
+      function focusInput(e) {
+        if (document.activeElement === inputEl) {
+          return;
+        } else if (e.key === "Enter") {
+          inputEl.current.focus();
+          setQuery("");
+        }
+      }
+      document.addEventListener("keydown", focusInput);
+    },
+    [setQuery]
+  );
+
   return (
     <nav className="nav-bar">
       <div className="logo">
@@ -18,6 +34,7 @@ function NavBar({ movies, query, setQuery }) {
         placeholder="Search movies..."
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        ref={inputEl}
       />
       <p className="num-results">
         Found <strong>{movies.length}</strong> results
@@ -96,7 +113,7 @@ function Error({ message }) {
   return <p className="error">❌{message}❌</p>;
 }
 
-function SelectedMovie({ selectedID, onBack }) {
+function SelectedMovie({ selectedID, onBack, onAddMovie }) {
   const [movie, setMovie] = useState({});
   const [isLoading, setIsLoading] = useState(false);
 
@@ -114,12 +131,26 @@ function SelectedMovie({ selectedID, onBack }) {
     Genre: genre,
   } = movie;
 
+  function handleAdd() {
+    const newWatchedMovie = {
+      imdbID: selectedID,
+      title,
+      year,
+      poster,
+      imdbRating: Number(imdbRating),
+      runtime: Number(runtime.split(" ")[0]),
+    };
+    onAddMovie(newWatchedMovie);
+  }
+
   useEffect(
     function () {
       setIsLoading(true);
+      const controller = new AbortController();
       async function getMovieDetail() {
         const res = await fetch(
-          `http://www.omdbapi.com/?&apikey=${key}&i=${selectedID}`
+          `http://www.omdbapi.com/?&apikey=${key}&i=${selectedID}`,
+          { signal: controller.signal }
         );
         if (!res.ok) {
           throw new Error("Details not Found");
@@ -129,9 +160,41 @@ function SelectedMovie({ selectedID, onBack }) {
         setIsLoading(false);
       }
       getMovieDetail();
+
+      return function () {
+        // controller.abort();
+      };
     },
     //  Dependency array tracking changes in the useEffect function
     [selectedID]
+  );
+
+  useEffect(() => {
+    if (!title) {
+      return;
+    } else {
+      document.title = `Movie | ${title}`;
+    }
+
+    // Cleaning up the useEffect
+    return function () {
+      document.title = "usePopcorn";
+    };
+  }, [title]);
+
+  useEffect(
+    function () {
+      function addEscape(e) {
+        if (e.key === "Escape") {
+          onBack();
+        }
+      }
+      document.addEventListener("keydown", addEscape);
+      return function () {
+        document.removeEventListener("keydown", addEscape);
+      };
+    },
+    [onBack]
   );
 
   return (
@@ -156,6 +219,11 @@ function SelectedMovie({ selectedID, onBack }) {
             </div>
           </header>
           <section>
+            <div>
+              <button className="btn-add" onClick={handleAdd}>
+                + Add to list
+              </button>
+            </div>
             <p>
               <em>{plot}</em>
             </p>
@@ -169,17 +237,17 @@ function SelectedMovie({ selectedID, onBack }) {
 }
 
 export default function App() {
-  const [movies, setMovies] = useState([]);
   const [query, setQuery] = useState("");
   const [watched, setWatched] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
+
   const [selectedID, setSelectedID] = useState(null);
 
   // Map function getting of array watched to grab ratings
   const avgImdbRating = average(watched.map((movie) => movie.imdbRating));
   const avgUserRating = average(watched.map((movie) => movie.userRating));
   const avgRuntime = average(watched.map((movie) => movie.runtime));
+
+  const { movies, isLoading, error } = useMovies(query, onBack);
 
   // must revisit
   function onHandleClick(id) {
@@ -190,39 +258,22 @@ export default function App() {
     setSelectedID(null);
   }
 
+  function HandleAddWatched(movie) {
+    setWatched((watched) => [...watched, movie]);
+  }
+
   useEffect(
     function () {
-      // must revisit
-      setIsLoading(true);
-      async function getMovies() {
-        try {
-          setIsLoading(true);
-          setError("");
-          const res = await fetch(
-            `http://www.omdbapi.com/?i=tt3896198&apikey=${key}&s=${query}`
-          );
-          if (!res.ok) {
-            throw new Error("Could not fetch movies");
-          }
-          const data = await res.json();
-
-          if (data.Response === "False") {
-            throw new Error("Movie Not Found");
-          }
-          if (data.Search === undefined) {
-            setMovies([]);
-          } else {
-            setMovies(data.Search);
-          }
-        } catch (err) {
-          setError(err.message);
-        } finally {
-          setIsLoading(false);
-        }
-      }
-      getMovies();
+      localStorage.setItem("watched", JSON.stringify(watched));
     },
-    [query]
+    [watched]
+  );
+
+  useEffect(
+    function () {
+      localStorage.setItem("movies", JSON.stringify(movies));
+    },
+    [movies]
   );
 
   return (
@@ -238,7 +289,11 @@ export default function App() {
         </Box>
         <Box>
           {selectedID ? (
-            <SelectedMovie selectedID={selectedID} onBack={onBack} />
+            <SelectedMovie
+              selectedID={selectedID}
+              onBack={onBack}
+              onAddMovie={HandleAddWatched}
+            />
           ) : (
             <>
               <Summary
